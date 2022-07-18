@@ -1,0 +1,116 @@
+# Copyright (c) Microsoft Corporation
+# All rights reserved.
+#
+# MIT License
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+# documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+# the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
+# to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+# BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+# DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+import nni
+import h5py
+import time
+
+import logging
+import numpy as np
+import os
+from sptag import Sptag
+from runner import run_individual_query
+from dataset import DATASETS, dataset_transform
+import argparse
+
+LOG = logging.getLogger('sptag')
+
+
+def knn_threshold(data, k, epsilon):
+    return data[k - 1] + epsilon
+
+
+def get_recall_values(dataset_distances, run_distances, k, epsilon=1e-3):
+    recalls = np.zeros(len(run_distances))
+    for i in range(len(run_distances)):
+        t = knn_threshold(dataset_distances[i], k, epsilon)
+        actual = 0
+        for d in run_distances[i][:k]:
+            if d <= t:
+                actual += 1
+        recalls[i] = actual
+
+    return (np.mean(recalls) / float(k), np.std(recalls) / float(k), recalls)
+
+
+def queries_per_second(attrs):
+    return 1.0 / attrs["best_search_time"]
+
+
+def compute_metrics(true_nn_distances, attrs, run_distances, k):
+    mean, std, recalls = get_recall_values(true_nn_distances, run_distances, k)
+    qps = queries_per_second(attrs)
+    print('mean: %12.3f,std: %12.3f, qps: %12.3f' % (mean, std, qps))
+    return mean, qps
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--dataset',
+                        metavar='NAME',
+                        help='the dataset to load training points from',
+                        default='glove-100-angular')
+    parser.add_argument('--algorithm',
+                        metavar='NAME',
+                        help='run only the named algorithm',
+                        default="BKT")
+    parser.add_argument("--k",
+                        default=10,
+                        help="the number of near neighbours to search for")
+    args = parser.parse_args()
+
+    D, dimension = DATASETS[args.dataset]()
+    X_train = np.array(D['train'])
+    X_test = np.array(D['test'])
+    distance = D.attrs['distance']
+    print('got a train set of size (%d * %d)' % (X_train.shape[0], dimension))
+    print('got %d queries' % len(X_test))
+
+    X_train, X_test = dataset_transform(D)
+
+    t0 = time.time()
+
+    para = nni.get_next_parameter()
+    algo = Sptag(args.algorithm, distance)
+    algo.fit(X_train, para)
+
+    build_time = time.time() - t0
+
+    print('Built index in', build_time)
+    algo.set_query_arguments()
+    attrs, results = run_individual_query(algo, X_train, X_test, distance,
+                                          args.k, 1)
+
+    times = [0 for _ in results]
+    neighbors = [0 for _ in results]
+    distances = [0 for _ in results]
+    for i, (t, ds) in enumerate(results):
+        times[i] = t
+        neighbors[i] = [n for n, d in ds] + [-1] * (args.k - len(ds))
+        distances[i] = [d for n, d in ds] + [float('inf')] * (args.k - len(ds))
+
+    recalls_mean, qps = compute_metrics(np.array(D["distances"]), attrs,
+                                        distances, args.k)
+    algo.save(str(algo))
+    metrics = {'default': recalls_mean, 'build_time': build_time, "qps": qps}
+
+    nni.report_final_result(metrics)
+
+
+if __name__ == '__main__':
+    main()

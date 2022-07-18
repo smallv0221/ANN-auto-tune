@@ -1,0 +1,15 @@
+experimentName: example_sptag
+trialConcurrency: 4
+maxExperimentDuration: 12h
+searchSpaceFile: search_space.json
+trialCommand: python main.py
+maxTrialNumber: 30
+
+tuner:
+  name: TPE
+  classArgs:
+    optimize_mode: maximize
+    
+trainingService:  # For other platforms, check mnist-pytorch example
+  platform: local
+

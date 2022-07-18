@@ -1,0 +1,21 @@
+experimentName: example_sptag
+trialConcurrency: 4
+maxExperimentDuration: 12h
+searchSpaceFile: search_space.json
+trialCommand: python main.py
+maxTrialNumber: 30
+nniManagerIp: 10.172.122.77
+
+tuner:
+  name: TPE
+  classArgs:
+    optimize_mode: maximize
+    
+trainingService:
+  platform: remote
+  machineList:
+    - host: vm401.az-wus2-a100-80gb-vmss2--az-wus2-a100-80gb.westus2.cloudapp.azure.com
+      port: 30391
+      user: xiaopengyuan
+      sshKeyFile: ~/.ssh/id_rsa/key
+
