@@ -20,9 +20,11 @@ class Sptag:
 
         self._sptag.Build(X, X.shape[0], False)
 
-    def set_query_arguments(self, MaxCheck=8192):
-        self._maxCheck = MaxCheck
-        self._sptag.SetSearchParam("MaxCheck", str(self._maxCheck), "Index")
+    def set_query_arguments(self, s_para=None):
+        if s_para:
+            self.s_para = s_para
+            for k, v in s_para.items():
+                self._sptag.SetSearchParam(k, str(v), "Index")
 
     def query(self, v, k):
         return self._sptag.Search(v, k)[0]
@@ -35,5 +37,8 @@ class Sptag:
         if self._para:
             s += ", " + ", ".join(
                 [k + "=" + str(v) for k, v in self._para.items()])
-        return 'Sptag(metric=%s, algo=%s, check=%d' % (
-            self._metric, self._algo, self._maxCheck) + s + ')'
+        if self.s_para:
+            s += ", " + ", ".join(
+                [k+"_s" + "=" + str(v) for k, v in self.s_para.items()])
+        return 'Sptag(metric=%s, algo=%s' % (
+            self._metric, self._algo) + s + ')'

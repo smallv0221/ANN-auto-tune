@@ -1,9 +1,8 @@
-experimentName: example_sptag
+experimentName: glove100
 trialConcurrency: 4
-maxExperimentDuration: 12h
+maxExperimentDuration: 168h
 searchSpaceFile: search_space.json
 trialCommand: python main.py
-maxTrialNumber: 30
 
 tuner:
   name: TPE

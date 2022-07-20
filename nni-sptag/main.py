@@ -19,15 +19,14 @@ import nni
 import h5py
 import time
 
-import logging
 import numpy as np
 import os
 from sptag import Sptag
 from runner import run_individual_query
 from dataset import DATASETS, dataset_transform
 import argparse
-
-LOG = logging.getLogger('sptag')
+import json
+import itertools
 
 
 def knn_threshold(data, k, epsilon):
@@ -46,6 +45,8 @@ def get_recall_values(dataset_distances, run_distances, k, epsilon=1e-3):
 
     return (np.mean(recalls) / float(k), np.std(recalls) / float(k), recalls)
 
+def sigmoid(x):
+    return 1/(1+(np.exp((-x))))
 
 def queries_per_second(attrs):
     return 1.0 / attrs["best_search_time"]
@@ -56,6 +57,23 @@ def compute_metrics(true_nn_distances, attrs, run_distances, k):
     qps = queries_per_second(attrs)
     print('mean: %12.3f,std: %12.3f, qps: %12.3f' % (mean, std, qps))
     return mean, qps
+
+def grid_search(params):
+    param_num = len(params)
+    max_param_choices = max([len(p[1]) for p in params])
+    temp = []
+    for i in range(max_param_choices):
+        temp += [i for _ in range(param_num)]
+    for c in set(itertools.permutations(temp,param_num)):
+        res = {}
+        for i in range(len(c)):
+            if c[i] >= len(params[i][1]):
+                break
+            else:
+                res[params[i][0]] = params[i][1][c[i]]
+        if len(res) == param_num:
+            yield res
+
 
 
 def main():
@@ -87,30 +105,47 @@ def main():
 
     para = nni.get_next_parameter()
     algo = Sptag(args.algorithm, distance)
-    algo.fit(X_train, para)
-
+    algo.fit(X_train,para)
     build_time = time.time() - t0
 
     print('Built index in', build_time)
-    algo.set_query_arguments()
-    attrs, results = run_individual_query(algo, X_train, X_test, distance,
-                                          args.k, 1)
 
-    times = [0 for _ in results]
-    neighbors = [0 for _ in results]
-    distances = [0 for _ in results]
-    for i, (t, ds) in enumerate(results):
-        times[i] = t
-        neighbors[i] = [n for n, d in ds] + [-1] * (args.k - len(ds))
-        distances[i] = [d for n, d in ds] + [float('inf')] * (args.k - len(ds))
+    search_param_choices = [("NumberOfInitialDynamicPivots",[1,2,4,8,16,32,50]),
+                            ("MaxCheck",[512,640,896,1408,2432,4408,8192]),
+                            ("NumberOfOtherDynamicPivots",[1,2,4,8,10])]
 
-    recalls_mean, qps = compute_metrics(np.array(D["distances"]), attrs,
-                                        distances, args.k)
-    algo.save(str(algo))
-    metrics = {'default': recalls_mean, 'build_time': build_time, "qps": qps}
+    best_search_params = {}
+    best_metric = -1
+    res = {}
+    for search_params in grid_search:
+        algo.set_query_arguments(search_params)
+        attrs, results = run_individual_query(algo, X_train, X_test, distance,
+                                            args.k, 1)
 
-    nni.report_final_result(metrics)
+        neighbors = [0 for _ in results]
+        distances = [0 for _ in results]
 
+        for idx, (t, ds) in enumerate(results):
+            neighbors[idx] = [n for n, d in ds] + [-1] * (args.k - len(ds))
+            distances[idx] = [d for n, d in ds] + [float('inf')] * (args.k - len(ds))
 
+        recalls_mean, qps = compute_metrics(np.array(D["distances"]), attrs,
+                                            distances, args.k)
+
+        combined_metric = recalls_mean * np.log(qps)
+        if combined_metric > best_metric:
+            best_metric = combined_metric
+            best_search_params = search_params
+            res = {"default": best_metric, "recall": recalls_mean, "qps": qps}
+
+    #algo.save(str(algo))
+    res['build_time'] = build_time
+    
+    nni.report_final_result(res)
+    res["build_params"] = para
+    res["search_params"] = best_search_params
+    with open("result_"+ str(algo) +".json","w") as f:
+        json.dump(res,f)
+        
 if __name__ == '__main__':
     main()
